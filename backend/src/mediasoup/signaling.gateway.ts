@@ -49,7 +49,7 @@ export class SignalingGateway
     console.log(`Client connected: ${client.id}`);
 
     const clientInfo: ClientInfo = {
-      clientId: '', // Will be set when they join a room
+      clientId: '',
       socketId: client.id,
       connectedAt: new Date(),
     };
@@ -62,7 +62,6 @@ export class SignalingGateway
 
     const clientInfo = this.clients.get(client.id);
     if (clientInfo) {
-      // Clean up mediasoup resources
       if (clientInfo.clientId) {
         this.mediasoupService.cleanupClient(clientInfo.clientId);
         this.clientsByClientId.delete(clientInfo.clientId);
@@ -70,7 +69,6 @@ export class SignalingGateway
 
       this.clients.delete(client.id);
 
-      // Notify other clients if this client was in a room
       if (clientInfo.roomId && clientInfo.clientId) {
         client.to(clientInfo.roomId).emit('clientDisconnected', {
           clientId: clientInfo.clientId,
@@ -103,15 +101,12 @@ export class SignalingGateway
         return { error: 'Client info not found' };
       }
 
-      // Update client info
       clientInfo.clientId = body.clientId;
       clientInfo.roomId = body.roomId;
       this.clientsByClientId.set(body.clientId, client.id);
 
-      // Join socket room
       client.join(body.roomId);
 
-      // Get existing producers and send to client
       const producers = this.mediasoupService.getProducerList(body.clientId);
       console.log(
         `Client ${body.clientId} joined room ${body.roomId}. Sending ${producers.length} existing producers`,
@@ -119,7 +114,6 @@ export class SignalingGateway
 
       client.emit('existingProducers', producers);
 
-      // Notify other clients about new participant
       client.to(body.roomId).emit('clientJoined', {
         clientId: body.clientId,
       });
@@ -151,7 +145,6 @@ export class SignalingGateway
         body.type,
       );
 
-      // Store transport ID in client info
       if (body.type === 'send') {
         clientInfo.sendTransportId = transport.id;
       } else {
@@ -186,7 +179,6 @@ export class SignalingGateway
         return { error: 'Missing transport parameters' };
       }
 
-      // Verify transport belongs to this client
       const clientInfo = this.clients.get(client.id);
       if (!clientInfo) {
         return { error: 'Client info not found' };
@@ -234,12 +226,10 @@ export class SignalingGateway
         clientInfo.clientId,
       );
 
-      // Close all existing screen share producers
       const closedProducers = this.mediasoupService.closeAllScreenShares(
         clientInfo.clientId,
       );
 
-      // Notify all clients in the room about closed screen shares
       if (clientInfo.roomId) {
         closedProducers.forEach((producerId) => {
           this.server
@@ -270,7 +260,6 @@ export class SignalingGateway
         return { error: 'Missing producer parameters' };
       }
 
-      // Verify transport belongs to this client and is a send transport
       const transportInfo = this.mediasoupService.getTransportInfo(
         body.transportId,
       );
@@ -310,7 +299,6 @@ export class SignalingGateway
         body.appData,
       );
 
-      // Create broadcast data with complete appData
       const broadcastData = {
         producerId: producer.id,
         kind: producer.kind,
@@ -324,7 +312,6 @@ export class SignalingGateway
         broadcastData,
       );
 
-      // Broadcast to all other clients in the same room
       client.to(clientInfo.roomId).emit('newProducer', broadcastData);
 
       return { producerId: producer.id };
@@ -349,7 +336,6 @@ export class SignalingGateway
         return { error: 'Missing consumer parameters' };
       }
 
-      // Verify transport belongs to this client and is a recv transport
       const transportInfo = this.mediasoupService.getTransportInfo(
         body.transportId,
       );
@@ -400,7 +386,6 @@ export class SignalingGateway
     }
   }
 
-  // Debug endpoint
   @SubscribeMessage('getStats')
   handleGetStats(@ConnectedSocket() client: Socket) {
     try {

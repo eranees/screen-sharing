@@ -107,7 +107,7 @@ export class MediasoupService {
         listenIps: [
           {
             ip: '0.0.0.0',
-            announcedIp: null, // Will use the actual IP
+            announcedIp: null, // actual IP
           },
         ],
         enableUdp: true,
@@ -115,7 +115,6 @@ export class MediasoupService {
         preferUdp: true,
         initialAvailableOutgoingBitrate: 1000000,
         maxSctpMessageSize: 262144,
-        // maxIncomingBitrate: 1500000,
       });
 
       const transportInfo: TransportInfo = {
@@ -128,7 +127,6 @@ export class MediasoupService {
 
       this.transports.set(transport.id, transportInfo);
 
-      // Track transports per client
       if (!this.clientTransports.has(clientId)) {
         this.clientTransports.set(clientId, new Set());
       }
@@ -157,7 +155,6 @@ export class MediasoupService {
         this.cleanupTransport(transport.id);
       });
 
-      // Set up transport timeout cleanup (30 minutes)
       setTimeout(
         () => {
           const info = this.transports.get(transport.id);
@@ -184,7 +181,6 @@ export class MediasoupService {
   private cleanupTransport(transportId: string) {
     const transportInfo = this.transports.get(transportId);
     if (transportInfo) {
-      // Remove from client tracking
       const clientTransportSet = this.clientTransports.get(
         transportInfo.clientId,
       );
@@ -195,7 +191,6 @@ export class MediasoupService {
         }
       }
 
-      // Close transport if not already closed
       if (!transportInfo.transport.closed) {
         transportInfo.transport.close();
       }
@@ -364,7 +359,6 @@ export class MediasoupService {
     const closedProducerIds: string[] = [];
 
     this.producers.forEach((producer, producerId) => {
-      // Check if this is a screen share and not from the excluded client
       if (
         producer.appData?.source === 'screen' &&
         producer.kind === 'video' &&
@@ -394,7 +388,6 @@ export class MediasoupService {
       }));
   }
 
-  // Get transport info for debugging
   getTransportInfo(transportId: string) {
     const info = this.transports.get(transportId);
     if (!info) return null;
@@ -409,7 +402,6 @@ export class MediasoupService {
     };
   }
 
-  // Get all transports for a client
   getClientTransports(clientId: string) {
     const transportIds = this.clientTransports.get(clientId) || new Set();
     return Array.from(transportIds)
@@ -417,19 +409,15 @@ export class MediasoupService {
       .filter(Boolean);
   }
 
-  // Clean up resources for a specific client
   cleanupClient(clientId: string) {
     console.log(`Cleaning up resources for client: ${clientId}`);
 
-    // Get all transports for this client
     const transportIds = this.clientTransports.get(clientId) || new Set();
 
-    // Close all transports for this client
     transportIds.forEach((transportId) => {
       this.cleanupTransport(transportId);
     });
 
-    // Close all producers for this client
     this.producers.forEach((producer, producerId) => {
       if (producer.appData.clientId === clientId) {
         console.log(`Closing producer ${producerId} for client ${clientId}`);
@@ -438,7 +426,6 @@ export class MediasoupService {
       }
     });
 
-    // Close all consumers for this client (if we tracked them by client)
     this.consumers.forEach((consumer, consumerId) => {
       if (consumer.appData?.clientId === clientId) {
         console.log(`Closing consumer ${consumerId} for client ${clientId}`);
@@ -450,11 +437,9 @@ export class MediasoupService {
     console.log(`Cleanup completed for client: ${clientId}`);
   }
 
-  // Clean up all resources
   async cleanup() {
     console.log('Cleaning up all MediaSoup resources');
 
-    // Close all consumers
     this.consumers.forEach((consumer) => {
       if (!consumer.closed) {
         consumer.close();
@@ -462,7 +447,6 @@ export class MediasoupService {
     });
     this.consumers.clear();
 
-    // Close all producers
     this.producers.forEach((producer) => {
       if (!producer.closed) {
         producer.close();
@@ -470,7 +454,6 @@ export class MediasoupService {
     });
     this.producers.clear();
 
-    // Close all transports
     this.transports.forEach((transportInfo) => {
       if (!transportInfo.transport.closed) {
         transportInfo.transport.close();
@@ -479,18 +462,15 @@ export class MediasoupService {
     this.transports.clear();
     this.clientTransports.clear();
 
-    // Close router
     if (this.router && !this.router.closed) {
       this.router.close();
     }
 
-    // Close worker
     if (this.worker && !this.worker.closed) {
       this.worker.close();
     }
   }
 
-  // Health check method
   getStats() {
     return {
       transports: this.transports.size,
