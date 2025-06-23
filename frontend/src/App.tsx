@@ -1,7 +1,8 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import { io, Socket } from "socket.io-client";
 import { Device } from "mediasoup-client";
 import VideoTile from "./VideoTile";
+import { getSocket } from "./socket/socket";
 
 type RemotePeer = {
 	clientId: string;
@@ -25,35 +26,21 @@ const App: React.FC = () => {
 	const [isConnected, setIsConnected] = useState(false);
 	const [error, setError] = useState<string>("");
 	const [isScreenSharing, setIsScreenSharing] = useState(false);
+	const [isJoined, setIsJoined] = useState(false);
 
 	const localStreamRef = useRef<MediaStream | null>(null);
 	const localVideoRef = useRef<HTMLVideoElement>(null);
 	const screenShareRef = useRef<MediaStream | null>(null);
 	const screenProducerRef = useRef<any>(null);
-
-	const clientId = useRef(`client-${Math.random().toString(36).substring(2, 9)}`);
+	const audioProducerRef = useRef<any>(null);
+	const videoProducerRef = useRef<any>(null);
 
 	useEffect(() => {
 		const run = async () => {
 			try {
-				const s = io("http://localhost:3000", {
-					transports: ["websocket"],
-				});
+				const s = getSocket();
 
-				s.on("connect", () => {
-					console.log("Connected to server");
-					setIsConnected(true);
-				});
-
-				s.on("disconnect", () => {
-					console.log("Disconnected from server");
-					setIsConnected(false);
-				});
-
-				s.on("error", (error: any) => {
-					console.error("Socket error:", error);
-					setError(error.message || "Connection error");
-				});
+				setIsConnected(true);
 
 				setSocket(s);
 
@@ -67,12 +54,13 @@ const App: React.FC = () => {
 				});
 
 				// Get RTP capabilities
-				const rtpCapabilitiesResponse = await new Promise<any>((resolve) => {
+				const rtpCapabilitiesResponse = await new Promise<any>((resolve, reject) => {
 					s.emit("getRtpCapabilities", {}, (response: any) => {
 						if (response.error) {
-							throw new Error(response.error);
+							reject(new Error(response.error));
+						} else {
+							resolve(response);
 						}
-						resolve(response);
 					});
 				});
 
@@ -85,42 +73,33 @@ const App: React.FC = () => {
 				await dev.load({ routerRtpCapabilities: rtpCapabilitiesResponse.rtpCapabilities });
 				setDevice(dev);
 
-				// Create transports first
-				await createTransports(dev, s);
-
-				// Join room after transports are ready
-				s.emit("joinRoom", { roomId: "main", clientId: clientId.current });
-
-				// Listen for existing producers
-				s.on("existingProducers", (prods: any[]) => {
-					console.log("Existing producers received:", prods);
-					prods.forEach((p) => {
-						console.log("Processing existing producer:", p);
-						subscribeToProducer(p, dev, s);
-					});
-				});
-
-				// Listen for new producers
-				s.on("newProducer", (p: any) => {
-					console.log("New producer received:", p);
-					subscribeToProducer(p, dev, s);
-				});
-
-				// Listen for producer closed events
-				s.on("producerClosed", ({ producerId }: { producerId: string }) => {
-					console.log("Producer closed:", producerId);
-					setPeers((prev) => {
-						const peer = prev.find((p) => p.producerId === producerId);
-						if (peer) {
-							console.log("Closing consumer for closed producer:", producerId);
-							peer.consumer.close();
+				// JOIN ROOM FIRST
+				const joinResponse = await new Promise<any>((resolve, reject) => {
+					s.emit("joinRoom", { roomId: "main", clientId: clientId.current }, (response: any) => {
+						if (response.error) {
+							reject(new Error(response.error));
+						} else {
+							resolve(response);
 						}
-						return prev.filter((p) => p.producerId !== producerId);
 					});
 				});
+
+				console.log("Joined room successfully:", joinResponse);
+				setIsJoined(true);
+
+				// Create transports after joining
+				const { sendTransport: st, recvTransport: rt } = await createTransports(dev, s);
+				setSendTransport(st);
+				setRecvTransport(rt);
 
 				// Start local media
-				await startLocal(dev, s);
+				await startLocal(st);
+
+				// Fixed: Set up event listeners AFTER everything is ready
+				s.on("existingProducers", handleExistingProducers);
+				s.on("newProducer", handleNewProducer);
+				s.on("producerClosed", handleProducerClosed);
+				s.on("clientDisconnected", handleClientDisconnected);
 			} catch (error) {
 				console.error("Setup error:", error);
 				setError(`Setup failed: ${error instanceof Error ? error.message : "Unknown error"}`);
@@ -129,7 +108,6 @@ const App: React.FC = () => {
 
 		run();
 
-		// Cleanup on unmount
 		return () => {
 			if (socket) {
 				socket.disconnect();
@@ -141,9 +119,165 @@ const App: React.FC = () => {
 				screenShareRef.current.getTracks().forEach((track) => track.stop());
 			}
 		};
+	}, []); // Fixed: Remove dependencies to prevent re-running
+
+	const clientId = useRef(`client-${Math.random().toString(36).substring(2, 9)}`);
+
+	// Fixed: Create memoized subscribeToProducer function
+	const subscribeToProducer = useCallback(
+		async (producerData: { producerId: string; clientId: string; kind: "audio" | "video"; appData?: any }) => {
+			if (!device || !recvTransport || !socket) {
+				console.log("check clients", producerData.clientId, clientId.current);
+				console.log("Cannot subscribe:", {
+					hasDevice: !!device,
+					hasRecvTransport: !!recvTransport,
+					hasSocket: !!socket,
+					isOwnProducer: producerData.clientId === clientId.current,
+				});
+				return;
+			}
+
+			try {
+				console.log("Subscribing to producer:", producerData);
+
+				// Check if already subscribed
+				const existingPeer = peers.find((p) => p.producerId === producerData.producerId);
+				if (existingPeer) {
+					console.log(`Already subscribed to producer ${producerData.producerId}`);
+					return;
+				}
+
+				const consumeResponse = await new Promise<any>((resolve, reject) => {
+					console.log("here is socket", socket);
+					socket?.emit(
+						"consume",
+						{
+							transportId: recvTransport.id,
+							producerId: producerData.producerId,
+							rtpCapabilities: device.rtpCapabilities,
+						},
+						(response: any) => {
+							if (response.error) {
+								reject(new Error(response.error));
+							} else {
+								resolve(response);
+							}
+						}
+					);
+				});
+
+				console.log("Consume response:", consumeResponse);
+
+				const consumer = await recvTransport.consume({
+					id: consumeResponse.consumerId,
+					producerId: producerData.producerId,
+					kind: producerData.kind,
+					rtpParameters: consumeResponse.rtpParameters,
+				});
+
+				// CRITICAL: Resume the consumer immediately
+				console.log("Resuming consumer:", consumer.id);
+				await consumer.resume();
+
+				// Verify consumer state
+				console.log("Consumer state after resume:", {
+					id: consumer.id,
+					kind: consumer.kind,
+					paused: consumer.paused,
+					closed: consumer.closed,
+					track: {
+						id: consumer.track.id,
+						kind: consumer.track.kind,
+						readyState: consumer.track.readyState,
+						enabled: consumer.track.enabled,
+						muted: consumer.track.muted,
+					},
+				});
+
+				const isScreenShare = producerData.appData?.source === "screen";
+
+				setPeers((prev) => {
+					const newPeer: RemotePeer = {
+						clientId: producerData.clientId,
+						kind: producerData.kind,
+						producerId: producerData.producerId,
+						isScreenShare,
+						consumer: {
+							id: consumer.id,
+							kind: consumer.kind,
+							track: consumer.track,
+							close: () => {
+								try {
+									consumer.close();
+								} catch (error) {
+									console.error("Error closing consumer:", error);
+								}
+							},
+						},
+					};
+
+					console.log("Adding peer:", newPeer);
+					return [...prev, newPeer];
+				});
+			} catch (error) {
+				console.error("Error subscribing to producer:", error);
+			}
+		},
+		[device, recvTransport, socket, peers]
+	);
+
+	// Memoized socket event handlers
+	const handleExistingProducers = useCallback(
+		(prods: any[]) => {
+			console.log("Existing producers received:", prods);
+			prods.forEach((p) => {
+				console.log("Processing existing producer:", p);
+				subscribeToProducer(p);
+			});
+		},
+		[subscribeToProducer]
+	);
+
+	const handleNewProducer = useCallback(
+		(p: any) => {
+			console.log("New producer received:", p);
+			subscribeToProducer(p);
+		},
+		[subscribeToProducer]
+	);
+
+	const handleProducerClosed = useCallback(({ producerId }: { producerId: string }) => {
+		console.log("Producer closed:", producerId);
+		setPeers((prev) => {
+			const peer = prev.find((p) => p.producerId === producerId);
+			if (peer) {
+				console.log("Closing consumer for closed producer:", producerId);
+				try {
+					peer.consumer.close();
+				} catch (error) {
+					console.error("Error closing consumer:", error);
+				}
+			}
+			return prev.filter((p) => p.producerId !== producerId);
+		});
 	}, []);
 
-	const startLocal = async (dev?: any, s?: Socket) => {
+	const handleClientDisconnected = useCallback(({ clientId: disconnectedClientId }: { clientId: string }) => {
+		console.log("Client disconnected:", disconnectedClientId);
+		setPeers((prev) => {
+			const clientPeers = prev.filter((p) => p.clientId === disconnectedClientId);
+			clientPeers.forEach((peer) => {
+				try {
+					peer.consumer.close();
+				} catch (error) {
+					console.error("Error closing consumer for disconnected client:", error);
+				}
+			});
+			return prev.filter((p) => p.clientId !== disconnectedClientId);
+		});
+	}, []);
+
+	const startLocal = async (sendTransportParam?: any) => {
 		try {
 			const stream = await navigator.mediaDevices.getUserMedia({
 				audio: true,
@@ -155,22 +289,23 @@ const App: React.FC = () => {
 				localVideoRef.current.srcObject = stream;
 			}
 
-			// Use passed parameters or state
-			const currentDevice = dev || device;
-			const currentSocket = s || socket;
-			console.log("currentDevice", currentDevice);
-			console.log("currentSocket", currentSocket);
-			const currentSendTransport = sendTransport;
+			const currentSendTransport = sendTransportParam || sendTransport;
 
-			// Produce local camera/mic tracks if sendTransport is ready
 			if (currentSendTransport && localStreamRef.current) {
 				for (const track of localStreamRef.current.getTracks()) {
 					try {
-						await currentSendTransport.produce({
+						const producer = await currentSendTransport.produce({
 							track,
 							appData: { source: "camera" },
 						});
-						console.log(`Produced ${track.kind} track from camera`);
+
+						if (track.kind === "audio") {
+							audioProducerRef.current = producer;
+						} else {
+							videoProducerRef.current = producer;
+						}
+
+						console.log(`Produced ${track.kind} track from camera:`, producer.id);
 					} catch (error) {
 						console.error("Error producing track:", error);
 					}
@@ -182,15 +317,16 @@ const App: React.FC = () => {
 		}
 	};
 
-	const createTransports = async (device: any, s: Socket) => {
+	const createTransports = async (device: any, s: Socket): Promise<{ sendTransport: any; recvTransport: any }> => {
 		try {
 			// Create send transport
-			const sendTransportResponse = await new Promise<any>((resolve) => {
+			const sendTransportResponse = await new Promise<any>((resolve, reject) => {
 				s.emit("createTransport", { type: "send" }, (response: any) => {
 					if (response.error) {
-						throw new Error(response.error);
+						reject(new Error(response.error));
+					} else {
+						resolve(response);
 					}
-					resolve(response);
 				});
 			});
 
@@ -200,20 +336,23 @@ const App: React.FC = () => {
 				"connect",
 				async ({ dtlsParameters }: any, callback: () => void, errback: (error: Error) => void) => {
 					try {
-						s.emit(
-							"connectTransport",
-							{
-								transportId: sendTransport.id,
-								dtlsParameters,
-							},
-							(response: any) => {
-								if (response.error) {
-									errback(new Error(response.error));
-								} else {
-									callback();
+						await new Promise<any>((resolve, reject) => {
+							s.emit(
+								"connectTransport",
+								{
+									transportId: sendTransport.id,
+									dtlsParameters,
+								},
+								(response: any) => {
+									if (response.error) {
+										reject(new Error(response.error));
+									} else {
+										resolve(response);
+									}
 								}
-							}
-						);
+							);
+						});
+						callback();
 					} catch (error) {
 						errback(error as Error);
 					}
@@ -229,39 +368,42 @@ const App: React.FC = () => {
 				) => {
 					try {
 						console.log("Producing:", { kind, appData });
-						s.emit(
-							"produce",
-							{
-								transportId: sendTransport.id,
-								clientId: clientId.current,
-								kind,
-								rtpParameters,
-								appData, // Pass through appData to identify screen share
-							},
-							(response: any) => {
-								if (response.error) {
-									errback(new Error(response.error));
-								} else {
-									console.log("Produce success:", response);
-									callback({ id: response.producerId });
+						const response = await new Promise<any>((resolve, reject) => {
+							s.emit(
+								"produce",
+								{
+									transportId: sendTransport.id,
+									clientId: clientId.current,
+									kind,
+									rtpParameters,
+									appData,
+								},
+								(response: any) => {
+									if (response.error) {
+										reject(new Error(response.error));
+									} else {
+										resolve(response);
+									}
 								}
-							}
-						);
+							);
+						});
+						console.log("Produce success:", response);
+						callback({ id: response.producerId });
 					} catch (error) {
+						console.error("Produce error:", error);
 						errback(error as Error);
 					}
 				}
 			);
 
-			setSendTransport(sendTransport);
-
 			// Create receive transport
-			const recvTransportResponse = await new Promise<any>((resolve) => {
+			const recvTransportResponse = await new Promise<any>((resolve, reject) => {
 				s.emit("createTransport", { type: "recv" }, (response: any) => {
 					if (response.error) {
-						throw new Error(response.error);
+						reject(new Error(response.error));
+					} else {
+						resolve(response);
 					}
-					resolve(response);
 				});
 			});
 
@@ -271,189 +413,138 @@ const App: React.FC = () => {
 				"connect",
 				async ({ dtlsParameters }: any, callback: () => void, errback: (error: Error) => void) => {
 					try {
-						s.emit(
-							"connectTransport",
-							{
-								transportId: recvTransport.id,
-								dtlsParameters,
-							},
-							(response: any) => {
-								if (response.error) {
-									errback(new Error(response.error));
-								} else {
-									callback();
+						await new Promise<any>((resolve, reject) => {
+							s.emit(
+								"connectTransport",
+								{
+									transportId: recvTransport.id,
+									dtlsParameters,
+								},
+								(response: any) => {
+									if (response.error) {
+										reject(new Error(response.error));
+									} else {
+										resolve(response);
+									}
 								}
-							}
-						);
+							);
+						});
+						callback();
 					} catch (error) {
 						errback(error as Error);
 					}
 				}
 			);
 
-			setRecvTransport(recvTransport);
-
 			console.log("Transports created successfully");
+			return { sendTransport, recvTransport };
 		} catch (error) {
 			console.error("Error creating transports:", error);
 			setError("Failed to create transports");
+			throw error;
 		}
 	};
 
-	const subscribeToProducer = async (
-		producerData: {
-			producerId: string;
-			clientId: string;
-			kind: "audio" | "video";
-			appData?: any;
-		},
-		dev?: any,
-		s?: Socket
-	) => {
-		const currentDevice = dev || device;
-		const currentRecvTransport = recvTransport;
-		const currentSocket = s || socket;
+	const startShare = async (e: React.MouseEvent) => {
+		e.preventDefault();
 
-		if (!currentDevice || !currentRecvTransport || !currentSocket || producerData.clientId === clientId.current) {
-			console.log("Cannot subscribe:", {
-				hasDevice: !!currentDevice,
-				hasRecvTransport: !!currentRecvTransport,
-				hasSocket: !!currentSocket,
-				isOwnProducer: producerData.clientId === clientId.current,
-			});
-			return;
-		}
-
-		try {
-			console.log("Subscribing to producer:", producerData);
-
-			const consumeResponse = await new Promise<any>((resolve, reject) => {
-				currentSocket.emit(
-					"consume",
-					{
-						transportId: currentRecvTransport.id,
-						producerId: producerData.producerId,
-						rtpCapabilities: currentDevice.rtpCapabilities,
-					},
-					(response: any) => {
-						if (response.error) {
-							reject(new Error(response.error));
-						} else {
-							resolve(response);
-						}
-					}
-				);
-			});
-
-			console.log("Consume response:", consumeResponse);
-
-			const consumer = await currentRecvTransport.consume({
-				id: consumeResponse.consumerId,
-				producerId: producerData.producerId,
-				kind: producerData.kind,
-				rtpParameters: consumeResponse.rtpParameters,
-			});
-
-			// Resume the consumer
-			await consumer.resume();
-
-			// Check if this is a screen share
-			const isScreenShare = producerData.appData?.source === "screen";
-			console.log("Consumer created:", {
-				consumerId: consumer.id,
-				isScreenShare,
-				appData: producerData.appData,
-			});
-
-			setPeers((prev) => {
-				// If this is a new screen share, close any existing screen shares from other clients
-				if (isScreenShare && producerData.kind === "video") {
-					console.log("New screen share detected, closing existing screen shares");
-					prev.forEach((peer) => {
-						if (peer.isScreenShare && peer.kind === "video" && peer.producerId !== producerData.producerId) {
-							console.log("Closing existing screen share:", peer.producerId);
-							peer.consumer.close();
-						}
-					});
-					// Remove all existing screen shares
-					prev = prev.filter((p) => !(p.isScreenShare && p.kind === "video"));
-				}
-
-				// Remove existing peer with same producer ID to avoid duplicates
-				const filtered = prev.filter((p) => p.producerId !== producerData.producerId);
-
-				const newPeer: RemotePeer = {
-					clientId: producerData.clientId,
-					kind: producerData.kind,
-					producerId: producerData.producerId,
-					isScreenShare,
-					consumer: {
-						id: consumer.id,
-						kind: consumer.kind,
-						track: consumer.track,
-						close: () => consumer.close(),
-					},
-				};
-
-				console.log("Adding peer:", newPeer);
-				return [...filtered, newPeer];
-			});
-		} catch (error) {
-			console.error("Error subscribing to producer:", error);
-		}
-	};
-
-	const startShare = async () => {
 		if (!sendTransport || !socket) {
 			setError("Transport or socket not ready");
 			return;
 		}
 
 		try {
-			// First, notify server to close any existing screen shares
-			socket.emit("closeAllScreenShares", { clientId: clientId.current });
+			console.log("Starting screen share...");
 
-			const screenStream = await (navigator.mediaDevices as any).getDisplayMedia({
+			// Close existing screen shares
+			const closeResponse = await new Promise<any>((resolve, reject) => {
+				socket.emit("closeAllScreenShares", { clientId: clientId.current }, (response: any) => {
+					if (response.error) {
+						reject(new Error(response.error));
+					} else {
+						resolve(response);
+					}
+				});
+			});
+			console.log("Closed existing screen shares:", closeResponse);
+
+			// Get screen share stream with better constraints
+			const screenStream = await navigator.mediaDevices.getDisplayMedia({
 				video: {
-					width: 1920,
-					height: 1080,
-					frameRate: 15,
+					width: { ideal: 1920, max: 1920 },
+					height: { ideal: 1080, max: 1080 },
+					frameRate: { ideal: 30, max: 30 },
 				},
-				audio: false, // Set to true if you want to capture system audio
+				audio: false,
 			});
 
 			const screenTrack = screenStream.getVideoTracks()[0];
+			if (!screenTrack) {
+				throw new Error("No video track found in screen stream");
+			}
+
 			screenShareRef.current = screenStream;
 
+			console.log("Screen track details:", {
+				id: screenTrack.id,
+				kind: screenTrack.kind,
+				label: screenTrack.label,
+				readyState: screenTrack.readyState,
+				enabled: screenTrack.enabled,
+				settings: screenTrack.getSettings(),
+			});
+
+			// Handle screen share ending
 			screenTrack.onended = () => {
 				console.log("Screen sharing ended by user");
 				stopShare();
 			};
 
-			// Produce the screen track with appData to identify it as screen share
+			// Produce the screen track
+			console.log("Producing screen track...");
 			const producer = await sendTransport.produce({
 				track: screenTrack,
-				appData: { source: "screen" },
+				appData: { source: "screen", clientId: clientId.current },
 			});
 
 			screenProducerRef.current = producer;
 			setIsScreenSharing(true);
 
-			console.log("Screen sharing started with producer ID:", producer.id);
+			console.log("Screen sharing started successfully:", {
+				producerId: producer.id,
+				kind: producer.kind,
+				appData: producer.appData,
+			});
+
+			// Add producer event listeners
+			producer.on("transportclose", () => {
+				console.log("Screen producer transport closed");
+				stopShare();
+			});
+
+			producer.on("@close", () => {
+				console.log("Screen producer closed");
+				setIsScreenSharing(false);
+			});
 		} catch (error) {
 			console.error("Error starting screen share:", error);
-			setError("Failed to start screen sharing");
+			setError(`Failed to start screen sharing: ${error instanceof Error ? error.message : "Unknown error"}`);
 		}
 	};
 
 	const stopShare = async () => {
-		if (screenProducerRef.current) {
+		console.log("Stopping screen share...");
+
+		if (screenProducerRef.current && !screenProducerRef.current.closed) {
 			screenProducerRef.current.close();
 			screenProducerRef.current = null;
 		}
 
 		if (screenShareRef.current) {
-			screenShareRef.current.getTracks().forEach((track) => track.stop());
+			screenShareRef.current.getTracks().forEach((track) => {
+				console.log("Stopping track:", track.id);
+				track.stop();
+			});
 			screenShareRef.current = null;
 		}
 
@@ -461,36 +552,66 @@ const App: React.FC = () => {
 		console.log("Screen sharing stopped");
 	};
 
-	// Debug: Log peers state changes
+	// Debug: Log peer changes
 	useEffect(() => {
-		console.log("Peers updated:", peers);
+		console.log("Peers updated:", peers.length);
 		peers.forEach((peer) => {
 			console.log(
-				`Peer ${peer.clientId}: kind=${peer.kind}, isScreenShare=${peer.isScreenShare}, producerId=${peer.producerId}`
+				`Peer ${peer.clientId}: ${peer.kind}, screen=${peer.isScreenShare}, producer=${peer.producerId}, track=${peer.consumer.track.readyState}`
 			);
 		});
 	}, [peers]);
+
+	const screenSharePeers = peers.filter((p) => p.isScreenShare && p.kind === "video");
+	const videoPeers = peers.filter((p) => !p.isScreenShare && p.kind === "video");
 
 	return (
 		<div style={{ padding: "20px" }}>
 			<h1>Group Video Call with Screen Share</h1>
 
-			<div style={{ marginBottom: "20px" }}>
+			<div style={{ marginBottom: "20px", padding: "10px", backgroundColor: "#f5f5f5", borderRadius: "5px" }}>
 				<div>Status: {isConnected ? "✅ Connected" : "❌ Disconnected"}</div>
-				<div>Client ID: {clientId.current}</div>
-				<div>Peers: {peers.length}</div>
-				<div>Screen shares: {peers.filter((p) => p.isScreenShare && p.kind === "video").length}</div>
-				<div>Regular videos: {peers.filter((p) => !p.isScreenShare && p.kind === "video").length}</div>
-				{error && <div style={{ color: "red" }}>Error: {error}</div>}
+				<div>Room: {isJoined ? "✅ Joined" : "❌ Not Joined"}</div>
+				<div>Client: {clientId.current}</div>
+				<div>
+					Peers: {peers.length} (Screen: {screenSharePeers.length}, Video: {videoPeers.length})
+				</div>
+				<div>
+					Transports: Send={!!sendTransport ? "✅" : "❌"}, Recv={!!recvTransport ? "✅" : "❌"}
+				</div>
+				<div>Device: {!!device ? "✅" : "❌"}</div>
+				<div>Screen Sharing: {isScreenSharing ? "✅ Active" : "❌ Inactive"}</div>
+				{error && <div style={{ color: "red", fontWeight: "bold" }}>❌ {error}</div>}
 			</div>
 
 			<div style={{ marginBottom: "20px" }}>
 				{!isScreenSharing ? (
-					<button onClick={startShare} disabled={!sendTransport}>
+					<button
+						onClick={startShare}
+						disabled={!sendTransport || !isJoined}
+						style={{
+							padding: "10px 20px",
+							fontSize: "16px",
+							backgroundColor: sendTransport && isJoined ? "#4CAF50" : "#ccc",
+							color: "white",
+							border: "none",
+							borderRadius: "5px",
+							cursor: sendTransport && isJoined ? "pointer" : "not-allowed",
+						}}>
 						🖥️ Start Screen Share
 					</button>
 				) : (
-					<button onClick={stopShare} style={{ backgroundColor: "#ff4444", color: "white" }}>
+					<button
+						onClick={stopShare}
+						style={{
+							padding: "10px 20px",
+							fontSize: "16px",
+							backgroundColor: "#f44336",
+							color: "white",
+							border: "none",
+							borderRadius: "5px",
+							cursor: "pointer",
+						}}>
 						⏹️ Stop Screen Share
 					</button>
 				)}
@@ -498,99 +619,98 @@ const App: React.FC = () => {
 
 			<div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
 				{/* Local Video */}
-				<div>
-					<h3>You (Local)</h3>
+				<div style={{ border: "2px solid blue", padding: "10px", borderRadius: "8px" }}>
+					<h3>📹 Your Camera</h3>
 					<video
 						ref={localVideoRef}
 						muted
 						autoPlay
 						playsInline
-						style={{ width: 320, height: 240, border: "2px solid blue" }}
+						style={{ width: 320, height: 240, borderRadius: "4px" }}
 					/>
 				</div>
 
-				{/* Screen Shares - Show these prominently */}
-				{peers.filter((p) => p.isScreenShare && p.kind === "video").length > 0 ? (
-					<div>
-						<h2>🖥️ Screen Shares ({peers.filter((p) => p.isScreenShare && p.kind === "video").length})</h2>
-						<div style={{ display: "flex", flexWrap: "wrap", gap: "10px" }}>
-							{peers
-								.filter((p) => p.isScreenShare && p.kind === "video")
-								.map((p) => (
-									<div
-										key={`screen-${p.producerId}`}
-										style={{ border: "3px solid green", padding: "10px", backgroundColor: "#f0fff0" }}>
-										<h3>Screen from {p.clientId}</h3>
-										<div style={{ marginBottom: "5px", fontSize: "12px", color: "#666" }}>
-											Producer ID: {p.producerId}
-										</div>
-										<VideoTile
-											consumer={p.consumer}
-											style={{
-												width: 640,
-												height: 480,
-												border: "1px solid #ccc",
-												borderRadius: "8px",
-											}}
-										/>
+				{/* Screen Shares */}
+				{screenSharePeers.length > 0 ? (
+					<div style={{ border: "3px solid green", padding: "15px", borderRadius: "8px", backgroundColor: "#f0fff0" }}>
+						<h2>🖥️ Screen Shares ({screenSharePeers.length})</h2>
+						<div style={{ display: "flex", flexWrap: "wrap", gap: "15px" }}>
+							{screenSharePeers.map((peer) => (
+								<div
+									key={`screen-${peer.producerId}`}
+									style={{
+										border: "2px solid #4CAF50",
+										padding: "10px",
+										borderRadius: "8px",
+										backgroundColor: "white",
+									}}>
+									<h3>🖥️ {peer.clientId}</h3>
+									<div style={{ fontSize: "12px", color: "#666", marginBottom: "10px" }}>
+										Producer: {peer.producerId}
+										<br />
+										Consumer: {peer.consumer.id}
+										<br />
+										Track State: {peer.consumer.track.readyState}
 									</div>
-								))}
+									<VideoTile
+										consumer={peer.consumer}
+										style={{
+											width: 800,
+											height: 600,
+											border: "1px solid #ddd",
+											borderRadius: "4px",
+										}}
+									/>
+								</div>
+							))}
 						</div>
 					</div>
 				) : (
-					<div style={{ padding: "20px", backgroundColor: "#f9f9f9", borderRadius: "8px", textAlign: "center" }}>
-						<h3>🖥️ No Screen Shares Active</h3>
-						<p>When someone starts screen sharing, it will appear here.</p>
+					<div
+						style={{
+							padding: "40px",
+							backgroundColor: "#f9f9f9",
+							borderRadius: "8px",
+							textAlign: "center",
+							border: "2px dashed #ccc",
+						}}>
+						<h3>🖥️ No Screen Shares</h3>
+						<p>Screen shares will appear here when someone starts sharing.</p>
 					</div>
 				)}
 
 				{/* Regular Video Peers */}
-				{peers.filter((p) => !p.isScreenShare && p.kind === "video").length > 0 && (
-					<div>
-						<h3>👥 Participants</h3>
+				{videoPeers.length > 0 && (
+					<div style={{ border: "2px solid #2196F3", padding: "15px", borderRadius: "8px" }}>
+						<h3>👥 Participants ({videoPeers.length})</h3>
 						<div style={{ display: "flex", flexWrap: "wrap", gap: "10px" }}>
-							{peers
-								.filter((p) => !p.isScreenShare && p.kind === "video")
-								.map((p) => (
-									<div key={`video-${p.producerId}`} style={{ border: "2px solid #ccc", padding: "5px" }}>
-										<h4>{p.clientId}</h4>
-										<VideoTile
-											consumer={p.consumer}
-											style={{
-												width: 320,
-												height: 240,
-												border: "1px solid #999",
-												borderRadius: "4px",
-											}}
-										/>
+							{videoPeers.map((peer) => (
+								<div
+									key={`video-${peer.producerId}`}
+									style={{
+										border: "1px solid #ccc",
+										padding: "10px",
+										borderRadius: "8px",
+										backgroundColor: "white",
+									}}>
+									<h4>👤 {peer.clientId}</h4>
+									<div style={{ fontSize: "11px", color: "#666", marginBottom: "5px" }}>
+										Track: {peer.consumer.track.readyState}
 									</div>
-								))}
+									<VideoTile
+										consumer={peer.consumer}
+										style={{
+											width: 320,
+											height: 240,
+											border: "1px solid #999",
+											borderRadius: "4px",
+										}}
+									/>
+								</div>
+							))}
 						</div>
 					</div>
 				)}
-
-				{/* Debug Information */}
-				<div style={{ marginTop: "20px", padding: "10px", backgroundColor: "#f0f0f0", borderRadius: "5px" }}>
-					<h4>Debug Info:</h4>
-					<div>Total peers: {peers.length}</div>
-					<div>
-						Transports ready: Send={!!sendTransport}, Recv={!!recvTransport}
-					</div>
-					<div>Device ready: {!!device}</div>
-					<div>Screen sharing: {isScreenSharing ? "Yes" : "No"}</div>
-					{peers.length > 0 && (
-						<div>
-							<strong>Peer details:</strong>
-							<ul>
-								{peers.map((p) => (
-									<li key={p.producerId}>
-										{p.clientId} - {p.kind} - {p.isScreenShare ? "Screen" : "Camera"} - Producer: {p.producerId}
-									</li>
-								))}
-							</ul>
-						</div>
-					)}
-				</div>
 			</div>
 		</div>
 	);

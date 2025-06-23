@@ -38,7 +38,7 @@ export class SignalingGateway
 
   async afterInit() {
     try {
-      await this.mediasoupService.createWorker();
+      await this.mediasoupService.createMediaSoupWorker();
       console.log('MediaSoup worker created successfully');
     } catch (error) {
       console.error('Failed to create MediaSoup worker:', error);
@@ -77,18 +77,6 @@ export class SignalingGateway
     }
   }
 
-  @SubscribeMessage('getRtpCapabilities')
-  handleRtpCapabilities(@ConnectedSocket() client: Socket) {
-    console.log('getRtpCapabilities: ', client.id);
-    try {
-      const rtpCapabilities = this.mediasoupService.getRtpCapabilities();
-      return { rtpCapabilities };
-    } catch (error) {
-      console.error('Error getting RTP capabilities:', error);
-      return { error: 'Failed to get RTP capabilities' };
-    }
-  }
-
   @SubscribeMessage('joinRoom')
   handleJoinRoom(@MessageBody() body: any, @ConnectedSocket() client: Socket) {
     try {
@@ -122,6 +110,18 @@ export class SignalingGateway
     } catch (error) {
       console.error('Error joining room:', error);
       return { error: 'Failed to join room' };
+    }
+  }
+
+  @SubscribeMessage('getRtpCapabilities')
+  handleRtpCapabilities(@ConnectedSocket() client: Socket) {
+    console.log('getRtpCapabilities: ', client.id);
+    try {
+      const rtpCapabilities = this.mediasoupService.getRtpCapabilities();
+      return { rtpCapabilities };
+    } catch (error) {
+      console.error('Error getting RTP capabilities:', error);
+      return { error: 'Failed to get RTP capabilities' };
     }
   }
 

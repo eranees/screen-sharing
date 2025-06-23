@@ -25,7 +25,7 @@ export class MediasoupService {
   private consumers = new Map<string, types.Consumer>();
   private clientTransports = new Map<string, Set<string>>(); // clientId -> Set of transportIds
 
-  async createWorker() {
+  async createMediaSoupWorker() {
     try {
       this.worker = await createWorker({
         rtcMinPort: 40000,
