@@ -341,7 +341,7 @@ export const VideoCall = () => {
 			try {
 				await videoEl.play();
 				addDebugLog("Screen share video started playing");
-			} catch (err) {
+			} catch (err: any) {
 				addDebugLog("Failed to play screen share video: " + err.message);
 			}
 		};
