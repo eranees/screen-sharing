@@ -51,14 +51,19 @@ export const VideoCall = () => {
 			setScreenShareStream(screenStream);
 
 			// Clone the stream for local display to avoid conflicts
+			// Clone the stream for local display
 			const localDisplayStream = screenStream.clone();
 
-			// Display local screen share
+			if (localDisplayStream.getVideoTracks().length === 0) {
+				addDebugLog("Cloned screen share stream has no video tracks");
+				return;
+			}
+
 			if (screenShareVideo.current) {
 				screenShareVideo.current.srcObject = localDisplayStream;
-				screenShareVideo.current.muted = true; // Prevent echo
+				screenShareVideo.current.muted = true;
+				screenShareVideo.current.title = "Local screen share";
 
-				// Wait for metadata to load then play
 				screenShareVideo.current.addEventListener(
 					"loadedmetadata",
 					async () => {
@@ -193,6 +198,7 @@ export const VideoCall = () => {
 			video.style.borderRadius = "8px";
 			video.style.backgroundColor = "#000";
 			video.id = `screen-share-${socketId}`;
+			video.style.objectFit = "contain";
 
 			// Add label for screen share
 			const label = document.createElement("div");
@@ -312,6 +318,7 @@ export const VideoCall = () => {
 				video.autoplay = true;
 				video.playsInline = true;
 				video.muted = consumer.kind === "audio" ? false : true;
+				video.style.objectFit = "contain";
 
 				// Style based on media type
 				if (response.mediaType === "screen") {
@@ -591,6 +598,34 @@ export const VideoCall = () => {
 		};
 	}, [socket]);
 
+	useEffect(() => {
+		if (!isScreenSharing || !screenShareStream) return;
+
+		const videoEl = screenShareVideo.current;
+		if (!videoEl) {
+			console.warn("screenShareVideo not ready yet");
+			return;
+		}
+
+		videoEl.srcObject = screenShareStream;
+		videoEl.muted = true;
+
+		const play = async () => {
+			try {
+				await videoEl.play();
+				addDebugLog("Screen share video started playing");
+			} catch (err) {
+				addDebugLog("Failed to play screen share video: " + err.message);
+			}
+		};
+
+		videoEl.addEventListener("loadedmetadata", play, { once: true });
+
+		return () => {
+			videoEl.removeEventListener("loadedmetadata", play);
+		};
+	}, [isScreenSharing, screenShareStream]);
+
 	return (
 		<div style={{ padding: "20px" }}>
 			<div style={{ marginBottom: "20px" }}>
@@ -630,54 +665,78 @@ export const VideoCall = () => {
 			</div>
 
 			<div style={{ display: "flex", gap: "40px", flexWrap: "wrap" }}>
-				<div>
-					<h3>Local Video</h3>
+				{/* Local Section */}
+				<div
+					style={{
+						display: "flex",
+						flexDirection: "column",
+						gap: "20px",
+						padding: "20px",
+						backgroundColor: "#f0f8ff",
+						border: "2px solid #007bff",
+						borderRadius: "12px",
+						boxShadow: "0 4px 12px rgba(0, 123, 255, 0.2)",
+						maxWidth: "360px",
+					}}>
+					<h3 style={{ margin: "0 0 10px 0", color: "#007bff" }}>You</h3>
+
 					<video
 						ref={localVideo}
 						autoPlay
 						muted
 						playsInline
 						style={{
-							width: "300px",
+							width: "100%",
 							height: "200px",
-							border: "2px solid #007bff",
 							borderRadius: "8px",
+							border: "2px solid #007bff",
+							objectFit: "contain",
 						}}
 					/>
+
+					{isScreenSharing && (
+						<div>
+							<h4 style={{ margin: "10px 0 6px 0", color: "#ffc107" }}>Screen Share</h4>
+							<video
+								ref={screenShareVideo}
+								autoPlay
+								muted
+								playsInline
+								style={{
+									width: "100%",
+									height: "200px",
+									borderRadius: "8px",
+									border: "2px solid #ffc107",
+									backgroundColor: "#000",
+									objectFit: "contain",
+								}}
+							/>
+						</div>
+					)}
 				</div>
 
-				{/* Local Screen Share */}
-				{isScreenSharing && (
-					<div>
-						<h3>Your Screen Share</h3>
-						<video
-							ref={screenShareVideo}
-							autoPlay
-							muted
-							playsInline
-							style={{
-								width: "300px",
-								height: "300px",
-								border: "3px solid #ffc107",
-								borderRadius: "8px",
-								backgroundColor: "#000",
-							}}
-						/>
-					</div>
-				)}
+				{/* Remote Section */}
+				<div
+					style={{
+						flexGrow: 1,
+						minWidth: "300px",
+						padding: "20px",
+						backgroundColor: "#fff8f0",
+						border: "2px solid #28a745",
+						borderRadius: "12px",
+						boxShadow: "0 4px 12px rgba(40, 167, 69, 0.2)",
+					}}>
+					<h3 style={{ color: "#28a745", marginBottom: "15px" }}>
+						Remote Participants ({Math.max(consumers.size - 1, 0)})
+					</h3>
 
-				<div>
-					<h3>Remote Videos ({consumers.size - 1})</h3>
 					<div
 						ref={remoteContainer}
 						style={{
 							display: "flex",
 							flexWrap: "wrap",
-							gap: "10px",
+							gap: "12px",
 							minHeight: "200px",
-							padding: "10px",
-							border: "1px dashed #ccc",
-							borderRadius: "8px",
 						}}
 					/>
 				</div>
