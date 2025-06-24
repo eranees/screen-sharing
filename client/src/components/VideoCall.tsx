@@ -271,7 +271,6 @@ export const VideoCall = () => {
 		// Capture refs early to avoid stale closures
 		const localVideoRef = localVideo.current;
 		const remoteContainerRef = remoteContainer.current;
-
 		const consumeRemoteProducer = async (
 			producerId: string,
 			device: mediasoupClient.types.Device,
@@ -279,26 +278,12 @@ export const VideoCall = () => {
 			mediaType?: "camera" | "screen"
 		) => {
 			try {
-				addDebugLog(`Attempting to consume producer: ${producerId} (${mediaType || "unknown"})`);
-
 				const response = await socket.emitWithAck("consume", {
 					producerId,
 					rtpCapabilities: device.rtpCapabilities,
 				});
 
-				if (!response.success) {
-					addDebugLog(`Failed to consume: ${response.error}`);
-					return;
-				}
-
-				addDebugLog(
-					`Consume response received: ${JSON.stringify({
-						id: response.id,
-						kind: response.kind,
-						producerId: response.producerId,
-						mediaType: response.mediaType,
-					})}`
-				);
+				if (!response.success) return;
 
 				const consumer = await recvTransport.consume({
 					id: response.id,
@@ -307,46 +292,56 @@ export const VideoCall = () => {
 					rtpParameters: response.rtpParameters,
 				});
 
-				// Store consumer for cleanup
-				setConsumers((prev) => new Map(prev.set(response.id, consumer)));
+				// ✅ Track check BEFORE appending to DOM
+				const track = consumer.track;
+				if (consumer.kind !== "video" || !track || track.readyState === "ended") {
+					console.log("❌ Skipping invalid video consumer");
+					return;
+				}
 
-				const stream = new MediaStream([consumer.track]);
-				addDebugLog(`Created MediaStream with track: ${consumer.track.kind}`);
+				const stream = new MediaStream([track]);
 
+				if (stream.getVideoTracks().length === 0) {
+					console.log("❌ No usable video track, skipping");
+					return;
+				}
+
+				// ✅ Build a unique ID based on media type and producerId
+				const videoId = `${mediaType === "screen" ? "screen" : "camera"}-video-${response.producerId}`;
+				if (document.getElementById(videoId)) {
+					console.log(`⚠ Video already exists for producerId: ${response.producerId}`);
+					return;
+				}
+
+				// ✅ Now safe to add to DOM
 				const video = document.createElement("video");
 				video.srcObject = stream;
 				video.autoplay = true;
 				video.playsInline = true;
-				video.muted = consumer.kind === "audio" ? false : true;
+				video.muted = true;
 				video.style.objectFit = "contain";
-
-				// Style based on media type
-				if (response.mediaType === "screen") {
-					video.style.width = "600px";
-					video.style.height = "400px";
-					video.style.border = "3px solid #ffc107";
-				} else {
-					video.style.width = "300px";
-					video.style.height = "200px";
-					video.style.border = "2px solid #28a745";
-				}
-
 				video.style.margin = "5px";
 				video.style.borderRadius = "8px";
-				video.id = `remote-video-${response.id}`;
+				video.dataset.mediaType = mediaType ?? "camera";
+				video.id = videoId;
 
-				// Resume consumer if paused
-				if (consumer.paused) {
-					await consumer.resume();
-					addDebugLog(`Consumer ${response.id} resumed`);
+				// Style by media type
+				if (mediaType === "screen") {
+					video.style.border = "3px solid #ffc107"; // yellow
+					video.style.width = "600px";
+					video.style.height = "400px";
+				} else {
+					video.style.border = "2px solid #28a745"; // green
+					video.style.width = "300px";
+					video.style.height = "200px";
 				}
 
-				remoteContainerRef?.appendChild(video);
-				addDebugLog(`Remote video element added for producer: ${producerId}`);
-			} catch (error) {
-				const errorMsg = error instanceof Error ? error.message : "Unknown error";
-				addDebugLog(`Error consuming remote producer: ${errorMsg}`);
-				console.error("Error consuming remote producer:", error);
+				remoteContainer.current?.appendChild(video);
+				setConsumers((prev) => new Map(prev.set(response.id, consumer)));
+
+				if (consumer.paused) await consumer.resume();
+			} catch (err) {
+				console.error("consumeRemoteProducer error", err);
 			}
 		};
 
@@ -614,8 +609,8 @@ export const VideoCall = () => {
 			try {
 				await videoEl.play();
 				addDebugLog("Screen share video started playing");
-			} catch (err) {
-				addDebugLog("Failed to play screen share video: " + err.message);
+			} catch (err: any) {
+				addDebugLog("Failed to play screen share video: " + err?.message);
 			}
 		};
 
@@ -727,7 +722,7 @@ export const VideoCall = () => {
 						boxShadow: "0 4px 12px rgba(40, 167, 69, 0.2)",
 					}}>
 					<h3 style={{ color: "#28a745", marginBottom: "15px" }}>
-						Remote Participants ({Math.max(consumers.size - 1, 0)})
+						<h3>Remote Participants ({consumers.size})</h3>
 					</h3>
 
 					<div
