@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import * as mediasoupClient from "mediasoup-client";
 import { useSocket } from "../context/useSocket";
 
@@ -24,10 +24,10 @@ export const VideoCall = () => {
 
 	const ROOM_ID = "room-1";
 
-	const addDebugLog = (message: string) => {
+	const addDebugLog = useCallback((message: string) => {
 		console.log(message);
 		setDebugLog((prev) => [...prev.slice(-10), `${new Date().toLocaleTimeString()}: ${message}`]);
-	};
+	}, []);
 
 	const startScreenShare = async () => {
 		try {
@@ -51,7 +51,6 @@ export const VideoCall = () => {
 			setScreenShareStream(screenStream);
 
 			// Clone the stream for local display to avoid conflicts
-			// Clone the stream for local display
 			const localDisplayStream = screenStream.clone();
 
 			if (localDisplayStream.getVideoTracks().length === 0) {
@@ -153,137 +152,31 @@ export const VideoCall = () => {
 		}
 	};
 
-	const consumeRemoteScreenShare = async (producerId: string, socketId: string) => {
-		try {
-			if (!socket) return;
-
-			if (!device || !recvTransport) {
-				addDebugLog("Device or receive transport not available for screen share consumption");
-				return;
-			}
-
-			addDebugLog(`Consuming remote screen share: ${producerId} from ${socketId}`);
-
-			const response = await socket.emitWithAck("consume", {
-				producerId,
-				rtpCapabilities: device.rtpCapabilities,
-			});
-
-			if (!response.success) {
-				addDebugLog(`Failed to consume screen share: ${response.error}`);
-				return;
-			}
-
-			const consumer = await recvTransport.consume({
-				id: response.id,
-				producerId: response.producerId,
-				kind: response.kind,
-				rtpParameters: response.rtpParameters,
-			});
-
-			// Store consumer for cleanup
-			setConsumers((prev) => new Map(prev.set(response.id, consumer)));
-
-			const stream = new MediaStream([consumer.track]);
-
-			const video = document.createElement("video");
-			video.srcObject = stream;
-			video.autoplay = true;
-			video.playsInline = true;
-			video.muted = true;
-			video.style.width = "600px";
-			video.style.height = "400px";
-			video.style.margin = "10px";
-			video.style.border = "3px solid #ffc107";
-			video.style.borderRadius = "8px";
-			video.style.backgroundColor = "#000";
-			video.id = `screen-share-${socketId}`;
-			video.style.objectFit = "contain";
-
-			// Add label for screen share
-			const label = document.createElement("div");
-			label.textContent = `Screen Share - User ${socketId.substring(0, 8)}`;
-			label.style.position = "absolute";
-			label.style.top = "10px";
-			label.style.left = "10px";
-			label.style.backgroundColor = "rgba(255, 193, 7, 0.9)";
-			label.style.color = "#000";
-			label.style.padding = "5px 10px";
-			label.style.borderRadius = "4px";
-			label.style.fontSize = "12px";
-			label.style.fontWeight = "bold";
-
-			const container = document.createElement("div");
-			container.style.position = "relative";
-			container.style.display = "inline-block";
-			container.appendChild(video);
-			container.appendChild(label);
-
-			// Resume consumer if paused
-			if (consumer.paused) {
-				await consumer.resume();
-				addDebugLog(`Screen share consumer ${response.id} resumed`);
-			}
-
-			remoteContainer.current?.appendChild(container);
-
-			setRemoteScreenShares((prev) => new Map(prev.set(socketId, video)));
-			addDebugLog(`Remote screen share displayed for user: ${socketId}`);
-		} catch (error) {
-			const errorMsg = error instanceof Error ? error.message : "Unknown error";
-			addDebugLog(`Error consuming remote screen share: ${errorMsg}`);
-			console.error("Error consuming remote screen share:", error);
-		}
-	};
-
-	const removeRemoteScreenShare = (socketId: string, producerId: string) => {
-		addDebugLog(`Removing remote screen share for user: ${socketId}`);
-
-		// Find and remove the screen share video element
-		const screenShareElement = document.getElementById(`screen-share-${socketId}`);
-		if (screenShareElement) {
-			screenShareElement.parentElement?.remove(); // Remove the container div
-		}
-
-		setRemoteScreenShares((prev) => {
-			const newMap = new Map(prev);
-			newMap.delete(socketId);
-			return newMap;
-		});
-
-		// Close the consumer
-		consumers.forEach((consumer, consumerId) => {
-			if (consumer.producerId === producerId) {
-				consumer.close();
-				setConsumers((prev) => {
-					const newMap = new Map(prev);
-					newMap.delete(consumerId);
-					return newMap;
-				});
-				addDebugLog(`Screen share consumer closed: ${consumerId}`);
-			}
-		});
-	};
-
-	useEffect(() => {
-		if (!socket) return;
-
-		// Capture refs early to avoid stale closures
-		const localVideoRef = localVideo.current;
-		const remoteContainerRef = remoteContainer.current;
-		const consumeRemoteProducer = async (
-			producerId: string,
-			device: mediasoupClient.types.Device,
-			recvTransport: any,
-			mediaType?: "camera" | "screen"
-		) => {
+	// Unified function to consume any remote producer
+	const consumeRemoteProducer = useCallback(
+		async (producerId: string, socketId: string, mediaType: "camera" | "screen" = "camera") => {
 			try {
+				if (!socket || !device || !recvTransport) {
+					addDebugLog("Missing socket, device, or receive transport for consumption");
+					return;
+				}
+
+				if (socketId === socket.id) {
+					addDebugLog("Skipping own producer");
+					return;
+				}
+
+				addDebugLog(`Consuming ${mediaType} producer: ${producerId} from ${socketId}`);
+
 				const response = await socket.emitWithAck("consume", {
 					producerId,
 					rtpCapabilities: device.rtpCapabilities,
 				});
 
-				if (!response.success) return;
+				if (!response.success) {
+					addDebugLog(`Failed to consume ${mediaType}: ${response.error}`);
+					return;
+				}
 
 				const consumer = await recvTransport.consume({
 					id: response.id,
@@ -292,28 +185,33 @@ export const VideoCall = () => {
 					rtpParameters: response.rtpParameters,
 				});
 
-				// ✅ Track check BEFORE appending to DOM
+				// Track check BEFORE appending to DOM
 				const track = consumer.track;
 				if (consumer.kind !== "video" || !track || track.readyState === "ended") {
-					console.log("❌ Skipping invalid video consumer");
+					addDebugLog(`❌ Skipping invalid video consumer for ${mediaType}`);
+					consumer.close();
 					return;
 				}
 
 				const stream = new MediaStream([track]);
 
 				if (stream.getVideoTracks().length === 0) {
-					console.log("❌ No usable video track, skipping");
+					addDebugLog(`❌ No usable video track for ${mediaType}, skipping`);
+					consumer.close();
 					return;
 				}
 
-				// ✅ Build a unique ID based on media type and producerId
-				const videoId = `${mediaType === "screen" ? "screen" : "camera"}-video-${response.producerId}`;
-				if (document.getElementById(videoId)) {
-					console.log(`⚠ Video already exists for producerId: ${response.producerId}`);
-					return;
+				// Build a unique ID based on media type and socket ID
+				const videoId = `${mediaType}-video-${socketId}`;
+
+				// Remove existing video if it exists
+				const existingVideo = document.getElementById(videoId);
+				if (existingVideo) {
+					existingVideo.parentElement?.remove();
+					addDebugLog(`Removed existing ${mediaType} video for ${socketId}`);
 				}
 
-				// ✅ Now safe to add to DOM
+				// Create video element
 				const video = document.createElement("video");
 				video.srcObject = stream;
 				video.autoplay = true;
@@ -322,28 +220,159 @@ export const VideoCall = () => {
 				video.style.objectFit = "contain";
 				video.style.margin = "5px";
 				video.style.borderRadius = "8px";
-				video.dataset.mediaType = mediaType ?? "camera";
+				video.style.backgroundColor = "#000";
+				video.dataset.mediaType = mediaType;
 				video.id = videoId;
+
+				// Create container with label
+				const container = document.createElement("div");
+				container.style.position = "relative";
+				container.style.display = "inline-block";
+
+				// Create label
+				const label = document.createElement("div");
+				label.style.position = "absolute";
+				label.style.top = "10px";
+				label.style.left = "10px";
+				label.style.padding = "5px 10px";
+				label.style.borderRadius = "4px";
+				label.style.fontSize = "12px";
+				label.style.fontWeight = "bold";
+				label.style.zIndex = "10";
 
 				// Style by media type
 				if (mediaType === "screen") {
 					video.style.border = "3px solid #ffc107"; // yellow
 					video.style.width = "600px";
 					video.style.height = "400px";
+					label.textContent = `Screen Share - ${socketId.substring(0, 8)}`;
+					label.style.backgroundColor = "rgba(255, 193, 7, 0.9)";
+					label.style.color = "#000";
 				} else {
 					video.style.border = "2px solid #28a745"; // green
 					video.style.width = "300px";
 					video.style.height = "200px";
+					label.textContent = `Camera - ${socketId.substring(0, 8)}`;
+					label.style.backgroundColor = "rgba(40, 167, 69, 0.9)";
+					label.style.color = "#fff";
 				}
 
-				remoteContainer.current?.appendChild(video);
+				container.appendChild(video);
+				container.appendChild(label);
+
+				// Store consumer for cleanup
 				setConsumers((prev) => new Map(prev.set(response.id, consumer)));
 
-				if (consumer.paused) await consumer.resume();
-			} catch (err) {
-				console.error("consumeRemoteProducer error", err);
+				// Resume consumer if paused
+				if (consumer.paused) {
+					await consumer.resume();
+					addDebugLog(`${mediaType} consumer ${response.id} resumed`);
+				}
+
+				// Add to remote container
+				if (remoteContainer.current) {
+					remoteContainer.current.appendChild(container);
+					addDebugLog(`${mediaType} video displayed for user: ${socketId}`);
+				}
+
+				// Update screen share state if needed
+				if (mediaType === "screen") {
+					setRemoteScreenShares((prev) => new Map(prev.set(socketId, video)));
+				}
+			} catch (error) {
+				const errorMsg = error instanceof Error ? error.message : "Unknown error";
+				addDebugLog(`Error consuming ${mediaType} producer: ${errorMsg}`);
+				console.error(`Error consuming ${mediaType} producer:`, error);
 			}
+		},
+		[socket, device, recvTransport, addDebugLog]
+	);
+
+	const removeRemoteProducer = useCallback(
+		(socketId: string, producerId: string, mediaType: "camera" | "screen" = "camera") => {
+			addDebugLog(`Removing ${mediaType} for user: ${socketId}`);
+
+			// Find and remove the video element
+			const videoElement = document.getElementById(`${mediaType}-video-${socketId}`);
+			if (videoElement) {
+				videoElement.parentElement?.remove(); // Remove the container div
+				addDebugLog(`${mediaType} video element removed for ${socketId}`);
+			}
+
+			// Update screen share state if needed
+			if (mediaType === "screen") {
+				setRemoteScreenShares((prev) => {
+					const newMap = new Map(prev);
+					newMap.delete(socketId);
+					return newMap;
+				});
+			}
+
+			// Close the consumer
+			setConsumers((prev) => {
+				const newMap = new Map(prev);
+				for (const [consumerId, consumer] of prev.entries()) {
+					if (consumer.producerId === producerId) {
+						consumer.close();
+						newMap.delete(consumerId);
+						addDebugLog(`${mediaType} consumer closed: ${consumerId}`);
+						break;
+					}
+				}
+				return newMap;
+			});
+		},
+		[addDebugLog]
+	);
+
+	// Set up socket event listeners first, before starting the call
+	useEffect(() => {
+		if (!socket) return;
+
+		// Listen for new producers (camera/audio)
+		const handleNewProducer = async ({
+			producerId,
+			socketId,
+			mediaType,
+		}: {
+			producerId: string;
+			socketId: string;
+			mediaType?: "camera" | "screen";
+		}) => {
+			addDebugLog(`New producer detected: ${producerId} from socket: ${socketId} (${mediaType || "camera"})`);
+			await consumeRemoteProducer(producerId, socketId, mediaType || "camera");
 		};
+
+		// Listen for screen share events
+		const handleScreenShareStarted = async ({ producerId, socketId }: { producerId: string; socketId: string }) => {
+			addDebugLog(`Screen share started: ${producerId} from socket: ${socketId}`);
+			await consumeRemoteProducer(producerId, socketId, "screen");
+		};
+
+		const handleScreenShareStopped = ({ producerId, socketId }: { producerId: string; socketId: string }) => {
+			addDebugLog(`Screen share stopped: ${producerId} from socket: ${socketId}`);
+			removeRemoteProducer(socketId, producerId, "screen");
+		};
+
+		// Set up event listeners
+		socket.on("new-producer", handleNewProducer);
+		socket.on("screen-share-started", handleScreenShareStarted);
+		socket.on("screen-share-stopped", handleScreenShareStopped);
+
+		// Cleanup function
+		return () => {
+			socket.off("new-producer", handleNewProducer);
+			socket.off("screen-share-started", handleScreenShareStarted);
+			socket.off("screen-share-stopped", handleScreenShareStopped);
+		};
+	}, [socket, consumeRemoteProducer, removeRemoteProducer, addDebugLog]);
+
+	// Main call setup effect
+	useEffect(() => {
+		if (!socket) return;
+
+		const localVideoRef = localVideo.current;
+		const remoteContainerRef = remoteContainer.current;
 
 		const startCall = async () => {
 			try {
@@ -436,7 +465,7 @@ export const VideoCall = () => {
 					}
 				});
 
-				// Create receive transport BEFORE joining room
+				// Create receive transport
 				const recvTransportResponse = await socket.emitWithAck("create-transport", {
 					direction: "recv",
 				});
@@ -472,7 +501,7 @@ export const VideoCall = () => {
 					}
 				});
 
-				// Join room AFTER transports are ready
+				// Join room
 				const joinResponse = await socket.emitWithAck("join-room", { roomId: ROOM_ID });
 
 				if (!joinResponse.success) {
@@ -480,7 +509,7 @@ export const VideoCall = () => {
 				}
 				addDebugLog(`Joined room. Found ${joinResponse.producers?.length || 0} existing producers`);
 
-				// Produce audio and video tracks AFTER joining room
+				// Produce audio and video tracks
 				const producers = [];
 				for (const track of stream.getTracks()) {
 					const producer = await sendTransportObj.produce({ track });
@@ -492,7 +521,7 @@ export const VideoCall = () => {
 				if (joinResponse.producers && joinResponse.producers.length > 0) {
 					for (const { producerId, socketId, mediaType } of joinResponse.producers) {
 						addDebugLog(`Consuming existing producer: ${producerId} from socket: ${socketId} (${mediaType})`);
-						await consumeRemoteProducer(producerId, dev, recv, mediaType);
+						await consumeRemoteProducer(producerId, socketId, mediaType);
 					}
 				} else {
 					addDebugLog("No existing producers to consume");
@@ -510,49 +539,9 @@ export const VideoCall = () => {
 
 		startCall();
 
-		// Listen for new producers
-		const handleNewProducer = async ({
-			producerId,
-			socketId,
-			mediaType,
-		}: {
-			producerId: string;
-			socketId: string;
-			mediaType?: "camera" | "screen";
-		}) => {
-			addDebugLog(`New producer detected: ${producerId} from socket: ${socketId} (${mediaType})`);
-
-			if (device && recvTransport && socketId !== socket.id) {
-				await consumeRemoteProducer(producerId, device, recvTransport, mediaType);
-			} else {
-				addDebugLog(`Skipping own producer or missing transport/device`);
-			}
-		};
-
-		// Listen for screen share events
-		const handleScreenShareStarted = async ({ producerId, socketId }: { producerId: string; socketId: string }) => {
-			addDebugLog(`Screen share started: ${producerId} from socket: ${socketId}`);
-
-			if (device && recvTransport && socketId !== socket.id) {
-				await consumeRemoteScreenShare(producerId, socketId);
-			}
-		};
-
-		const handleScreenShareStopped = ({ producerId, socketId }: { producerId: string; socketId: string }) => {
-			addDebugLog(`Screen share stopped: ${producerId} from socket: ${socketId}`);
-			removeRemoteScreenShare(socketId, producerId);
-		};
-
-		socket.on("new-producer", handleNewProducer);
-		socket.on("screen-share-started", handleScreenShareStarted);
-		socket.on("screen-share-stopped", handleScreenShareStopped);
-
 		// Cleanup function
 		return () => {
 			addDebugLog("Cleaning up video call...");
-			socket.off("new-producer", handleNewProducer);
-			socket.off("screen-share-started", handleScreenShareStarted);
-			socket.off("screen-share-stopped", handleScreenShareStopped);
 
 			// Close consumers
 			consumers.forEach((consumer, id) => {
@@ -571,7 +560,7 @@ export const VideoCall = () => {
 				addDebugLog("Receive transport closed");
 			}
 
-			// Stop local stream using captured ref
+			// Stop local stream
 			if (localVideoRef?.srcObject) {
 				const stream = localVideoRef.srcObject as MediaStream;
 				stream.getTracks().forEach((track) => {
@@ -585,41 +574,13 @@ export const VideoCall = () => {
 				stopScreenShare();
 			}
 
-			// Clear remote videos using captured ref
+			// Clear remote videos
 			if (remoteContainerRef) {
 				remoteContainerRef.innerHTML = "";
 				addDebugLog("Remote video container cleared");
 			}
 		};
-	}, [socket]);
-
-	useEffect(() => {
-		if (!isScreenSharing || !screenShareStream) return;
-
-		const videoEl = screenShareVideo.current;
-		if (!videoEl) {
-			console.warn("screenShareVideo not ready yet");
-			return;
-		}
-
-		videoEl.srcObject = screenShareStream;
-		videoEl.muted = true;
-
-		const play = async () => {
-			try {
-				await videoEl.play();
-				addDebugLog("Screen share video started playing");
-			} catch (err: any) {
-				addDebugLog("Failed to play screen share video: " + err?.message);
-			}
-		};
-
-		videoEl.addEventListener("loadedmetadata", play, { once: true });
-
-		return () => {
-			videoEl.removeEventListener("loadedmetadata", play);
-		};
-	}, [isScreenSharing, screenShareStream]);
+	}, [socket]); // Remove dependencies that cause re-runs
 
 	return (
 		<div style={{ padding: "20px" }}>
@@ -721,9 +682,7 @@ export const VideoCall = () => {
 						borderRadius: "12px",
 						boxShadow: "0 4px 12px rgba(40, 167, 69, 0.2)",
 					}}>
-					<h3 style={{ color: "#28a745", marginBottom: "15px" }}>
-						<h3>Remote Participants ({consumers.size})</h3>
-					</h3>
+					<h3 style={{ color: "#28a745", marginBottom: "15px" }}>Remote Participants ({consumers.size})</h3>
 
 					<div
 						ref={remoteContainer}

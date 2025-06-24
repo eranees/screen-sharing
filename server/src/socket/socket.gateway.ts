@@ -385,20 +385,28 @@ export class SocketGateway
         mediaType,
       });
 
-      // If this is a screen share, track it separately
+      // Handle screen share vs regular producer differently
       if (mediaType === 'screen') {
         this.screenShareProducers.set(client.id, producer.id);
+        // Emit screen-share-started event
         client.to(roomId).emit('screen-share-started', {
           producerId: producer.id,
           socketId: client.id,
         });
+        this.logger.log(
+          `Screen share started by ${client.id} with producer ${producer.id}`,
+        );
       } else {
+        // Emit new-producer event for camera/audio
         client.to(roomId).emit('new-producer', {
           producerId: producer.id,
           socketId: client.id,
           mediaType,
           kind,
         });
+        this.logger.log(
+          `New ${mediaType} producer ${producer.id} from ${client.id}`,
+        );
       }
 
       this.logger.log(
@@ -457,6 +465,7 @@ export class SocketGateway
 
       this.screenShareProducers.set(client.id, producer.id);
 
+      // Notify all other clients in the room
       client.to(roomId).emit('screen-share-started', {
         producerId: producer.id,
         socketId: client.id,
@@ -512,6 +521,7 @@ export class SocketGateway
 
       this.screenShareProducers.delete(client.id);
 
+      // Notify all other clients in the room
       client.to(roomId).emit('screen-share-stopped', {
         producerId: screenShareProducerId,
         socketId: client.id,
@@ -566,7 +576,7 @@ export class SocketGateway
       });
 
       this.logger.log(
-        `Consumer ${consumer.id} created for client ${client.id}`,
+        `Consumer ${consumer.id} created for client ${client.id} consuming producer ${producerId} (${producerData.mediaType})`,
       );
 
       return {
