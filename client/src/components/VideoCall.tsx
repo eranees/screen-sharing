@@ -325,6 +325,34 @@ export const VideoCall = () => {
 		[addDebugLog]
 	);
 
+	useEffect(() => {
+		if (!isScreenSharing || !screenShareStream) return;
+
+		const videoEl = screenShareVideo.current;
+		if (!videoEl) {
+			console.warn("screenShareVideo not ready yet");
+			return;
+		}
+
+		videoEl.srcObject = screenShareStream;
+		videoEl.muted = true;
+
+		const play = async () => {
+			try {
+				await videoEl.play();
+				addDebugLog("Screen share video started playing");
+			} catch (err) {
+				addDebugLog("Failed to play screen share video: " + err.message);
+			}
+		};
+
+		videoEl.addEventListener("loadedmetadata", play, { once: true });
+
+		return () => {
+			videoEl.removeEventListener("loadedmetadata", play);
+		};
+	}, [isScreenSharing, screenShareStream]);
+
 	// Set up socket event listeners first, before starting the call
 	useEffect(() => {
 		if (!socket) return;
