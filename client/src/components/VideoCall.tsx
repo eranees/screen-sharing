@@ -28,6 +28,8 @@ export const VideoCall = () => {
 
 	const ROOM_ID = "room-1";
 
+	console.log(remoteScreenShares);
+
 	const addDebugLog = useCallback((message: string) => {
 		console.log(message);
 		setDebugLog((prev) => [...prev.slice(-10), `${new Date().toLocaleTimeString()}: ${message}`]);

@@ -63,6 +63,7 @@ export class SocketGateway
   constructor(private readonly socketService: SocketService) {}
 
   async afterInit(server: Server) {
+    console.log(server);
     try {
       this.worker = await createWorker({
         logLevel: 'debug',
@@ -228,6 +229,7 @@ export class SocketGateway
     @ConnectedSocket() client: Socket,
   ): RtpCapabilitiesResponse {
     try {
+      console.log(data, client);
       return {
         success: true,
         rtpCapabilities: this.router.rtpCapabilities,
