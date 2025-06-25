@@ -15,6 +15,7 @@ export const VideoCall = () => {
 	const [isConnected, setIsConnected] = useState(false);
 	const [consumers, setConsumers] = useState<Map<string, any>>(new Map());
 	const [debugLog, setDebugLog] = useState<string[]>([]);
+	const [showDebug, setShowDebug] = useState(true);
 
 	// Screen sharing state
 	const [isScreenSharing, setIsScreenSharing] = useState(false);
@@ -611,148 +612,320 @@ export const VideoCall = () => {
 	}, [socket]); // Remove dependencies that cause re-runs
 
 	return (
-		<div style={{ padding: "20px" }}>
-			<div style={{ marginBottom: "20px" }}>
-				<h2>Video Call - Room: {ROOM_ID}</h2>
+		<div
+			style={{
+				padding: "24px",
+				backgroundColor: "#f5f7fa",
+				minHeight: "100vh",
+
+				fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
+			}}>
+			<div
+				style={{
+					maxWidth: "1400px",
+					margin: "0 auto",
+					backgroundColor: "white",
+					borderRadius: "16px",
+					boxShadow: "0 4px 20px rgba(0, 0, 0, 0.08)",
+					overflow: "hidden",
+					height: "100vh",
+				}}>
+				{/* Header */}
 				<div
 					style={{
-						padding: "10px",
-						backgroundColor: isConnected ? "#d4edda" : "#f8d7da",
-						border: `1px solid ${isConnected ? "#c3e6cb" : "#f5c6cb"}`,
-						borderRadius: "4px",
-						marginBottom: "20px",
-					}}>
-					Status: {isConnected ? "Connected" : "Connecting..."}
-				</div>
-
-				{/* Screen Share Controls */}
-				<div style={{ marginBottom: "20px" }}>
-					<button
-						onClick={isScreenSharing ? stopScreenShare : startScreenShare}
-						disabled={!isConnected}
-						style={{
-							padding: "10px 20px",
-							backgroundColor: isScreenSharing ? "#dc3545" : "#007bff",
-							color: "white",
-							border: "none",
-							borderRadius: "4px",
-							cursor: isConnected ? "pointer" : "not-allowed",
-							fontSize: "16px",
-							fontWeight: "bold",
-						}}>
-						{isScreenSharing ? "Stop Screen Share" : "Start Screen Share"}
-					</button>
-					{isScreenSharing && (
-						<span style={{ marginLeft: "10px", color: "#28a745", fontWeight: "bold" }}>🟢 Screen sharing active</span>
-					)}
-				</div>
-			</div>
-
-			<div style={{ display: "flex", gap: "40px", flexWrap: "wrap" }}>
-				{/* Local Section */}
-				<div
-					style={{
+						padding: "20px 24px",
+						backgroundColor: "#4f46e5",
+						color: "white",
 						display: "flex",
-						flexDirection: "column",
-						gap: "20px",
-						padding: "20px",
-						backgroundColor: "#f0f8ff",
-						border: "2px solid #007bff",
-						borderRadius: "12px",
-						boxShadow: "0 4px 12px rgba(0, 123, 255, 0.2)",
-						maxWidth: "360px",
+						justifyContent: "space-between",
+						alignItems: "center",
 					}}>
-					<h3 style={{ margin: "0 0 10px 0", color: "#007bff" }}>You</h3>
+					<div>
+						<h1 style={{ margin: 0, fontSize: "24px", fontWeight: 600 }}>Video Conference</h1>
+						<div style={{ display: "flex", alignItems: "center", marginTop: "4px" }}>
+							<div
+								style={{
+									width: "10px",
+									height: "10px",
+									borderRadius: "50%",
+									backgroundColor: isConnected ? "#10b981" : "#ef4444",
+									marginRight: "8px",
+								}}
+							/>
+							<span>{isConnected ? `Connected to Room: ${ROOM_ID}` : "Connecting..."}</span>
+						</div>
+					</div>
 
-					<video
-						ref={localVideo}
-						autoPlay
-						muted
-						playsInline
+					<div style={{ display: "flex", gap: "12px" }}>
+						<button
+							onClick={isScreenSharing ? stopScreenShare : startScreenShare}
+							disabled={!isConnected}
+							style={{
+								padding: "8px 16px",
+								backgroundColor: isScreenSharing ? "#ef4444" : "#4f46e5",
+								color: "white",
+								borderRadius: "6px",
+								cursor: isConnected ? "pointer" : "not-allowed",
+								fontSize: "14px",
+								fontWeight: 500,
+								display: "flex",
+								alignItems: "center",
+								gap: "6px",
+								border: `1px solid ${isScreenSharing ? "#dc2626" : "#4338ca"}`,
+								transition: "all 0.2s",
+							}}>
+							{isScreenSharing ? (
+								<>
+									<svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+										<path d="M6 18L18 6M6 6L18 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+									</svg>
+									Stop Sharing
+								</>
+							) : (
+								<>
+									<svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+										<path
+											d="M9 3H5C4.46957 3 3.96086 3.21071 3.58579 3.58579C3.21071 3.96086 3 4.46957 3 5V19C3 19.5304 3.21071 20.0391 3.58579 20.4142C3.96086 20.7893 4.46957 21 5 21H19C19.5304 21 20.0391 20.7893 20.4142 20.4142C20.7893 20.0391 21 19.5304 21 19V15M15 3H21V9M10 14L21 3"
+											stroke="currentColor"
+											strokeWidth="2"
+											strokeLinecap="round"
+											strokeLinejoin="round"
+										/>
+									</svg>
+									Share Screen
+								</>
+							)}
+						</button>
+
+						<button
+							onClick={() => setShowDebug(!showDebug)}
+							style={{
+								padding: "8px 16px",
+								backgroundColor: showDebug ? "#6b7280" : "#4f46e5",
+								color: "white",
+								borderRadius: "6px",
+								cursor: "pointer",
+								fontSize: "14px",
+								fontWeight: 500,
+								display: "flex",
+								alignItems: "center",
+								gap: "6px",
+								border: `1px solid ${showDebug ? "#4b5563" : "#4338ca"}`,
+								transition: "all 0.2s",
+							}}>
+							<svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+								<path
+									d="M12 13V15M12 21C7.02944 21 3 16.9706 3 12C3 7.02944 7.02944 3 12 3C16.9706 3 21 7.02944 21 12C21 16.9706 16.9706 21 12 21ZM12 9V10"
+									stroke="currentColor"
+									strokeWidth="2"
+									strokeLinecap="round"
+								/>
+							</svg>
+							{showDebug ? "Hide Debug" : "Show Debug"}
+						</button>
+					</div>
+				</div>
+
+				{/* Main Content */}
+				<div
+					style={{
+						display: "grid",
+						gridTemplateColumns: "300px 1fr",
+						gap: "24px",
+						padding: "24px",
+					}}>
+					{/* Local User Panel */}
+					<div
 						style={{
-							width: "100%",
-							height: "200px",
-							borderRadius: "8px",
-							border: "2px solid #007bff",
-							objectFit: "contain",
-						}}
-					/>
+							backgroundColor: "#f9fafb",
+							borderRadius: "12px",
+							padding: "16px",
+							boxShadow: "0 1px 3px rgba(0, 0, 0, 0.05)",
+							border: "1px solid #e5e7eb",
+						}}>
+						<div
+							style={{
+								display: "flex",
+								flexDirection: "column",
+								gap: "16px",
+							}}>
+							<div
+								style={{
+									display: "flex",
+									alignItems: "center",
+									gap: "8px",
+									paddingBottom: "12px",
+									borderBottom: "1px solid #e5e7eb",
+								}}>
+								<div
+									style={{
+										width: "32px",
+										height: "32px",
+										borderRadius: "50%",
+										backgroundColor: "#4f46e5",
+										display: "flex",
+										alignItems: "center",
+										justifyContent: "center",
+										color: "white",
+										fontWeight: "bold",
+									}}>
+									Y
+								</div>
+								<h3 style={{ margin: 0, fontSize: "16px", fontWeight: 600 }}>You</h3>
+							</div>
 
-					{isScreenSharing && (
-						<div>
-							<h4 style={{ margin: "10px 0 6px 0", color: "#ffc107" }}>Screen Share</h4>
 							<video
-								ref={screenShareVideo}
+								ref={localVideo}
 								autoPlay
 								muted
 								playsInline
 								style={{
 									width: "100%",
-									height: "200px",
+									aspectRatio: "16/9",
 									borderRadius: "8px",
-									border: "2px solid #ffc107",
-									backgroundColor: "#000",
-									objectFit: "contain",
+									backgroundColor: "#e5e7eb",
+									objectFit: "cover",
 								}}
 							/>
+
+							{isScreenSharing && (
+								<div
+									style={{
+										marginTop: "12px",
+										paddingTop: "12px",
+										borderTop: "1px solid #e5e7eb",
+									}}>
+									<div
+										style={{
+											display: "flex",
+											alignItems: "center",
+											gap: "8px",
+											marginBottom: "8px",
+										}}>
+										<svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+											<path
+												d="M9 3H5C4.46957 3 3.96086 3.21071 3.58579 3.58579C3.21071 3.96086 3 4.46957 3 5V19C3 19.5304 3.21071 20.0391 3.58579 20.4142C3.96086 20.7893 4.46957 21 5 21H19C19.5304 21 20.0391 20.7893 20.4142 20.4142C20.7893 20.0391 21 19.5304 21 19V15M15 3H21V9M10 14L21 3"
+												stroke="#4f46e5"
+												strokeWidth="2"
+												strokeLinecap="round"
+												strokeLinejoin="round"
+											/>
+										</svg>
+										<span style={{ fontSize: "14px", fontWeight: 600, color: "#4f46e5" }}>Sharing Screen</span>
+									</div>
+									<video
+										ref={screenShareVideo}
+										autoPlay
+										muted
+										playsInline
+										style={{
+											width: "100%",
+											aspectRatio: "16/9",
+											borderRadius: "8px",
+											backgroundColor: "#111827",
+											objectFit: "contain",
+										}}
+									/>
+								</div>
+							)}
 						</div>
-					)}
-				</div>
+					</div>
 
-				{/* Remote Section */}
-				<div
-					style={{
-						flexGrow: 1,
-						minWidth: "300px",
-						padding: "20px",
-						backgroundColor: "#fff8f0",
-						border: "2px solid #28a745",
-						borderRadius: "12px",
-						boxShadow: "0 4px 12px rgba(40, 167, 69, 0.2)",
-					}}>
-					<h3 style={{ color: "#28a745", marginBottom: "15px" }}>Remote Participants ({consumers.size})</h3>
-
-					<div
-						ref={remoteContainer}
-						style={{
-							display: "flex",
-							flexWrap: "wrap",
-							gap: "12px",
-							minHeight: "200px",
-						}}
-					/>
-				</div>
-			</div>
-
-			{/* Debug Panel */}
-			<div style={{ marginTop: "20px" }}>
-				<h3>Debug Log</h3>
-				<div
-					style={{
-						height: "200px",
-						overflowY: "auto",
-						backgroundColor: "#f8f9fa",
-						border: "1px solid #dee2e6",
-						borderRadius: "4px",
-						padding: "10px",
-						fontSize: "12px",
-						fontFamily: "monospace",
-					}}>
-					{debugLog.map((log, index) => (
+					{/* Remote Participants */}
+					<div>
 						<div
-							key={index}
 							style={{
-								color:
-									log.includes("Error") || log.includes("Failed")
-										? "#dc3545"
-										: log.includes("Screen share")
-										? "#ffc107"
-										: "#000",
+								display: "flex",
+								alignItems: "center",
+								gap: "8px",
+								marginBottom: "16px",
 							}}>
-							{log}
+							<h3 style={{ margin: 0, fontSize: "18px", fontWeight: 600 }}>Participants</h3>
+							<div
+								style={{
+									backgroundColor: "#e0e7ff",
+									color: "#4f46e5",
+									padding: "4px 8px",
+									borderRadius: "12px",
+									fontSize: "12px",
+									fontWeight: 600,
+								}}>
+								{consumers.size} {consumers.size === 1 ? "participant" : "participants"}
+							</div>
 						</div>
-					))}
+
+						<div
+							ref={remoteContainer}
+							style={{
+								display: "grid",
+								gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
+								gap: "16px",
+								minHeight: "200px",
+							}}
+						/>
+					</div>
 				</div>
+
+				{/* Debug Panel */}
+				{showDebug && (
+					<div
+						style={{
+							padding: "16px 24px",
+							marginTop: "20px",
+							borderTop: "1px solid #e5e7eb",
+							backgroundColor: "#f9fafb",
+						}}>
+						<div
+							style={{
+								display: "flex",
+								alignItems: "center",
+								gap: "8px",
+								marginBottom: "12px",
+							}}>
+							<svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+								<path
+									d="M12 13V15M12 21C7.02944 21 3 16.9706 3 12C3 7.02944 7.02944 3 12 3C16.9706 3 21 7.02944 21 12C21 16.9706 16.9706 21 12 21ZM12 9V10"
+									stroke="#4f46e5"
+									strokeWidth="2"
+									strokeLinecap="round"
+								/>
+							</svg>
+							<h3 style={{ margin: 0, fontSize: "16px", fontWeight: 600, color: "#4f46e5" }}>Debug Log</h3>
+						</div>
+						<div
+							style={{
+								height: "300px",
+								overflowY: "auto",
+								backgroundColor: "#111827",
+								borderRadius: "8px",
+								padding: "12px",
+								fontSize: "12px",
+								fontFamily: "monospace",
+								color: "#e5e7eb",
+							}}>
+							{debugLog.length === 0 ? (
+								<div style={{ color: "#9ca3af" }}>No debug messages yet...</div>
+							) : (
+								debugLog.map((log, index) => (
+									<div
+										key={index}
+										style={{
+											color:
+												log.includes("Error") || log.includes("Failed")
+													? "#f87171"
+													: log.includes("Screen share")
+													? "#fbbf24"
+													: "#e5e7eb",
+											marginBottom: "4px",
+											lineHeight: "1.5",
+										}}>
+										{log}
+									</div>
+								))
+							)}
+						</div>
+					</div>
+				)}
 			</div>
 		</div>
 	);
