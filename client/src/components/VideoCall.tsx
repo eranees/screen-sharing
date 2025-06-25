@@ -22,6 +22,9 @@ export const VideoCall = () => {
 	const [screenShareProducer, setScreenShareProducer] = useState<any>(null);
 	const [screenShareStream, setScreenShareStream] = useState<MediaStream | null>(null);
 	const [remoteScreenShares, setRemoteScreenShares] = useState<Map<string, HTMLVideoElement>>(new Map());
+	const [pendingProducers, setPendingProducers] = useState<
+		{ producerId: string; socketId: string; mediaType: "camera" | "screen" }[]
+	>([]);
 
 	const ROOM_ID = "room-1";
 
@@ -157,8 +160,14 @@ export const VideoCall = () => {
 	const consumeRemoteProducer = useCallback(
 		async (producerId: string, socketId: string, mediaType: "camera" | "screen" = "camera") => {
 			try {
-				if (!socket || !device || !recvTransport) {
+				if (!socket) {
 					addDebugLog("Missing socket, device, or receive transport for consumption");
+					return;
+				}
+
+				if (!device || !recvTransport) {
+					addDebugLog(`Queuing producer ${producerId} - device/transport not ready`);
+					setPendingProducers((prev) => [...prev, { producerId, socketId, mediaType }]);
 					return;
 				}
 
@@ -325,6 +334,15 @@ export const VideoCall = () => {
 		},
 		[addDebugLog]
 	);
+
+	useEffect(() => {
+		if (device && recvTransport && pendingProducers.length > 0) {
+			pendingProducers.forEach(({ producerId, socketId, mediaType }) => {
+				consumeRemoteProducer(producerId, socketId, mediaType);
+			});
+			setPendingProducers([]); // Clear queue
+		}
+	}, [device, recvTransport, pendingProducers, consumeRemoteProducer]);
 
 	useEffect(() => {
 		if (!isScreenSharing || !screenShareStream) return;
